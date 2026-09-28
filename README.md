@@ -6,15 +6,15 @@
 
 1. **GitHub**：新建仓库（比如叫 splitbill）→ 点 "uploading an existing file" → 把这个文件夹里的文件全部拖进去 → Commit
 2. **Cloudflare**（免费注册）：进入 Workers 和 Pages → 创建 → 导入 Git 存储库（Import a repository）→ 授权 GitHub，选刚才的仓库
-   - 项目名称必须填 `splitbill`（和 wrangler.jsonc 里的 name 一致）
+   - 项目名称必须填 `split-bills`（和 wrangler.jsonc 里的 name 一致）
    - 其他设置保持默认，点部署。第一次部署会自动创建数据库
 3. **设置密钥**：部署完成后，进入这个 Worker → 设置 → 变量和机密 → 添加两个，类型都选「密钥 / Secret」：
    - `TOKEN`：随便一串字母数字，比如 `k7Qm2xPa9Lw4`，这是链接里的密钥
    - `ADMIN_KEY`：另一串，管理员用
-4. 打开 `https://splitbill.你的子域名.workers.dev/你的TOKEN/` 就能用了，把这个链接发到群里
+4. 打开 `https://split-bills.你的子域名.workers.dev/你的TOKEN/` 就能用了，把这个链接发到群里
 
 管理员链接（自己用，打开一次后结算页底部会出现"清空账本"）：
-`https://splitbill.你的子域名.workers.dev/你的TOKEN/?admin=你的ADMIN_KEY`
+`https://split-bills.你的子域名.workers.dev/你的TOKEN/?admin=你的ADMIN_KEY`
 
 ## 手机上怎么用
 
@@ -27,7 +27,8 @@
 
 在 GitHub 网页上直接编辑文件，保存后 Cloudflare 会自动重新部署。
 
-- 改成员名字、头像、颜色：`worker.js` 顶部的 `MEMBERS`（改成员 id 会让旧账对不上，建议清空账本后再改）
+- 改成员名字、头像：`worker.js` 顶部的 `MEMBERS`。`art` 是头像，按名字意象画的：`stream` 林间清溪、`moon` 满月、`south` 南方海边、`hill` 云雾小山、`skysea` 秋空大海、`joy` 满是欢喜的花（改成员 id 会让旧账对不上，建议清空账本后再改）
+- 改常用分类（吃饭、打车、酒店……）：`worker.js` 里的 `CATEGORIES`
 - 换密钥：在 Cloudflare 后台改 TOKEN / ADMIN_KEY 的值，不用动代码
 
 ## 其他

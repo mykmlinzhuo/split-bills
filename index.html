@@ -47,7 +47,7 @@ header{padding:18px 0 6px}
 .tabs button[aria-selected=true]{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 
 /* 头像 */
-.av{display:inline-grid;place-items:center;border-radius:50%;flex:none;line-height:1}
+.av{display:inline-block;border-radius:50%;flex:none;background-size:cover;background-position:center;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
 .av.s{width:22px;height:22px;font-size:13px}
 .av.m{width:30px;height:30px;font-size:17px}
 .av.l{width:42px;height:42px;font-size:23px}
@@ -129,6 +129,10 @@ td .nm{display:flex;align-items:center;gap:8px}
 .seg{display:flex;gap:4px;padding:4px;background:var(--chip);border-radius:10px}
 .seg button{flex:1;padding:8px 0;border-radius:7px;font-size:14px;color:var(--muted)}
 .seg button[aria-pressed=true]{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.cats{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.cats button{padding:6px 11px;border-radius:999px;background:var(--chip);font-size:14px;border:1.5px solid transparent;color:var(--ink)}
+.cats button[aria-pressed=true]{border-color:var(--ink);background:var(--surface);font-weight:600}
+.tf{margin:0 0 10px}
 .split-note{margin-top:10px;font-size:14px;color:var(--muted)}
 .exrow{display:flex;align-items:center;gap:10px;padding:6px 0}
 .exrow .n{flex:1}
@@ -206,6 +210,7 @@ const ls = {
 
 let S = {members:[], expenses:[], settlement:{balances:{}, transfers:[]}};
 let me = ls.get(K_ME);
+let onlyMine = ls.get('sb_tf') !== 'all';
 let admin = ls.get(K_ADMIN);
 const qp = new URLSearchParams(location.search);
 if (qp.get('admin')) { admin = qp.get('admin'); ls.set(K_ADMIN, admin); history.replaceState(null, '', location.pathname); }
@@ -215,7 +220,111 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const NF = new Intl.NumberFormat('zh-CN', {minimumFractionDigits:2, maximumFractionDigits:2});
 const yuan = c => '¥' + NF.format(c / 100);
 const mem = id => S.members.find(m => m.id === id) || {id, name:id, icon:'❔', color:'#888888'};
-const av = (id, size='m') => { const m = mem(id); return `<span class="av ${size}" style="background:${m.color}26" title="${esc(m.name)}">${m.icon}</span>`; };
+const av = (id, size='m') => {
+  const m = mem(id);
+  return ART[m.art] ? `<span class="av ${size} art-${m.art}" title="${esc(m.name)}"></span>`
+                    : `<span class="av ${size}" style="background:${m.color}" title="${esc(m.name)}"></span>`;
+};
+const catOf = id => (S.categories || []).find(c => c.id === id);
+function title(e){
+  const c = catOf(e.cat);
+  if (!c) return e.desc || '（没写备注）';
+  return `${c.icon} ${c.name}${e.desc ? ' · ' + e.desc : ''}`;
+}
+
+/* ---------------- 头像：程序画的印象派小画，每人一幅 ---------------- */
+function rng(seed){
+  let a = 0; for (const ch of seed) a = Math.imul(a ^ ch.charCodeAt(0), 2654435761);
+  return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+// 一层笔触：在 [x0,y0,x1,y1] 里随机点 n 笔，angle 可以是固定范围也可以是随位置变化的函数
+function strokes(R, o){
+  const [x0, y0, x1, y1] = o.box || [0, 0, 100, 100];
+  const U = (a, b) => a + (b - a) * R();
+  let out = '';
+  for (let i = 0; i < o.n; i++){
+    let x = U(x0, x1), y = U(y0, y1);
+    for (let k = 0; o.inside && !o.inside(x, y) && k < 30; k++){ x = U(x0, x1); y = U(y0, y1); }
+    const deg = typeof o.ang === 'function' ? o.ang(x, y) + U(-12, 12) : U(o.ang[0], o.ang[1]);
+    const l = U(o.len[0], o.len[1]) / 2, a = deg * Math.PI / 180;
+    const dx = Math.cos(a) * l, dy = Math.sin(a) * l;
+    const c = o.colors[Math.floor(R() * o.colors.length)];
+    out += `<line x1="${(x - dx).toFixed(1)}" y1="${(y - dy).toFixed(1)}" x2="${(x + dx).toFixed(1)}" y2="${(y + dy).toFixed(1)}" stroke="${c}" stroke-width="${U(o.w[0], o.w[1]).toFixed(1)}" stroke-linecap="round" opacity="${o.op || .9}"/>`;
+  }
+  return out;
+}
+// 沿折线 pts 撒笔触，width(t) 控制离中线多远（t 从 0 到 1）
+function along(R, pts, o){
+  let out = '';
+  for (let i = 0; i < o.n; i++){
+    const t = R(), seg = Math.min(pts.length - 2, Math.floor(t * (pts.length - 1))), f = t * (pts.length - 1) - seg;
+    const [ax, ay] = pts[seg], [bx, by] = pts[seg + 1];
+    const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1, off = (R() - .5) * 2 * o.width(t);
+    const x = ax + dx * f - dy / L * off, y = ay + dy * f + dx / L * off, deg = Math.atan2(dy, dx) * 180 / Math.PI;
+    out += strokes(R, {n:1, box:[x,y,x,y], colors:o.colors, len:o.len, w:o.w, ang:[deg - 10, deg + 10]});
+  }
+  return out;
+}
+// 每幅画都是按各人名字的意象画的
+const ART = {
+  // lz：林间一条清溪
+  stream: R => `<rect width="100" height="100" fill="#3E5E3A"/>`
+    + strokes(R, {n:170, colors:['#2F5A33','#4F7D3F','#6F9A4A','#8DB35A','#3C6B3E','#A9C46A'], len:[5,9], w:[4,6], ang:[0,180]})
+    + [12,30,74,90].map(x => strokes(R, {n:5, box:[x-2,10,x+2,70], colors:['#3A2E22','#4A3A2A','#2C241B'], len:[12,18], w:[2.5,3.5], ang:[84,96]})).join('')
+    + along(R, [[102,40],[70,52],[52,64],[40,80],[30,104]], {n:70, width:t => 2 + t * 11, colors:['#BFE3EC','#8CC7D8','#E9F6F8','#6FB2C8','#FFFFFF'], len:[5,10], w:[2.5,4]}),
+  // gq：一轮满月
+  moon: R => `<rect width="100" height="100" fill="#1C2447"/>`
+    + strokes(R, {n:120, box:[-5,-5,105,72], colors:['#1C2447','#27325E','#33407A','#1A2140','#3B4A86'], len:[8,14], w:[3.5,5], ang:[-15,15]})
+    + strokes(R, {n:40, box:[20,8,80,68], colors:['#E9DFA8','#C9C3A0','#8C8FB0','#F4EBC8'], len:[4,7], w:[2.5,3.5], ang:(x, y) => Math.atan2(y - 38, x - 50) * 180 / Math.PI + 90, inside:(x, y) => { const d = Math.hypot(x - 50, y - 38); return d > 19 && d < 28; }})
+    + `<circle cx="50" cy="38" r="17" fill="#F4EBC8"/>`
+    + strokes(R, {n:10, box:[36,26,64,50], colors:['#E6D9A6','#FFF8DC'], len:[3,6], w:[3,4], ang:[0,180], inside:(x, y) => Math.hypot(x - 50, y - 38) < 14})
+    + strokes(R, {n:40, box:[-5,68,105,82], colors:['#2A3A5A','#3A4E74','#C9C3A0','#E9DFA8'], len:[6,12], w:[3,4], ang:[-6,6]})
+    + strokes(R, {n:50, box:[-5,80,105,105], colors:['#2A3A3A','#3A4E44','#51624E'], len:[8,14], w:[3.5,5], ang:[-12,12]}),
+  // tjn：南方的海边，暖阳和椰子树
+  south: R => `<rect width="100" height="100" fill="#F4B27A"/>`
+    + strokes(R, {n:70, box:[-5,-5,105,50], colors:['#F7C68A','#F4A76A','#FBD9A0','#F2B880','#F59E7A'], len:[10,16], w:[4,6], ang:[-10,10]})
+    + `<circle cx="30" cy="30" r="10" fill="#FFE08A"/>`
+    + strokes(R, {n:60, box:[-5,48,105,80], colors:['#2BA6A8','#4CC0BE','#1E8C99','#7AD3CD','#FFE08A'], len:[8,14], w:[3,4.5], ang:[-6,6]})
+    + strokes(R, {n:40, box:[-5,78,105,105], colors:['#F1D7A6','#E8C58A','#F6E3BD'], len:[8,14], w:[4,6], ang:[-12,12]})
+    + `<path d="M80 102 Q74 70 70 40" fill="none" stroke="#5A3D24" stroke-width="3.5" stroke-linecap="round"/>`
+    + strokes(R, {n:26, box:[52,24,92,56], colors:['#2E7A45','#3E9150','#246438','#5AA85E'], len:[8,14], w:[2.5,3.5], ang:(x, y) => Math.atan2(y - 40, x - 70) * 180 / Math.PI, inside:(x, y) => Math.hypot(x - 70, y - 40) < 18}),
+  // zxs：一座小小的山，四周云雾环绕
+  hill: R => `<rect width="100" height="100" fill="#DCE6EE"/>`
+    + strokes(R, {n:80, box:[-5,-5,105,70], colors:['#DCE6EE','#C8D8E6','#EADFE3','#F0ECE4','#B9CCDF'], len:[10,16], w:[4,6], ang:[-10,10]})
+    + `<path d="M4 104 Q22 70 40 46 Q50 34 60 46 Q78 70 96 104 Z" fill="#5E8C62"/>`
+    + strokes(R, {n:120, box:[4,36,96,104], colors:['#5E8C62','#77A36E','#4A7652','#93B97E','#3F6A4C'], len:[5,9], w:[3,4.5], ang:(x, y) => x < 50 ? -55 : 55, inside:(x, y) => y > 44 + Math.abs(x - 50) * 1.05})
+    + strokes(R, {n:50, box:[-5,58,105,72], colors:['#FFFFFF','#EEF2F5','#DDE5EC'], len:[10,18], w:[4,6], ang:[-5,5], op:.85})
+    + strokes(R, {n:30, box:[-5,88,105,105], colors:['#3F6A4C','#4A7652','#2F5A3E'], len:[8,14], w:[4,6], ang:[-10,10]}),
+  // xmy：秋天高远的天空和大海
+  skysea: R => `<rect width="100" height="100" fill="#9CC6E8"/>`
+    + strokes(R, {n:80, box:[-5,-5,105,55], colors:['#9CC6E8','#B8D6EE','#7FB2DE','#E8E0C8','#CFE2F2'], len:[10,18], w:[4,6], ang:[-8,8]})
+    + strokes(R, {n:14, box:[10,12,90,30], colors:['#FFFFFF','#F4F1E6'], len:[10,18], w:[2,3], ang:[-6,6], op:.8})
+    + `<path d="M30 26 q4 -4 8 0 q4 -4 8 0" fill="none" stroke="#2A3440" stroke-width="1.6" stroke-linecap="round"/>`
+    + strokes(R, {n:110, box:[-5,54,105,105], colors:['#1E4F8A','#2A64A3','#173E70','#3D7BB8','#12325E'], len:[8,14], w:[3.5,5], ang:[-8,8]})
+    + strokes(R, {n:26, box:[0,58,100,100], colors:['#FFFFFF','#DDEBF6'], len:[3,6], w:[2,3], ang:[-10,10]}),
+  // hjy：一片开得热闹的花
+  joy: R => {
+    let s = `<rect width="100" height="100" fill="#F4E6A8"/>`
+      + strokes(R, {n:100, colors:['#F5E3A0','#EFD98C','#F8EDC0','#CFE0A0','#B8D48A'], len:[8,14], w:[4,6], ang:[0,180]});
+    const cols = ['#E84A5F','#FF847C','#F9A826','#6C5CE7','#2EC4B6','#FF6B9A','#FFFFFF'];
+    for (const [cx, cy] of [[24,26],[62,18],[82,46],[44,50],[18,70],[66,78],[40,90],[88,86]]){
+      const c = cols[Math.floor(R() * cols.length)];
+      s += strokes(R, {n:9, box:[cx-8,cy-8,cx+8,cy+8], colors:[c], len:[4,7], w:[3.5,4.5], ang:(x, y) => Math.atan2(y - cy, x - cx) * 180 / Math.PI, inside:(x, y) => { const d = Math.hypot(x - cx, y - cy); return d > 3 && d < 8; }})
+        + `<circle cx="${cx}" cy="${cy}" r="2.6" fill="#F9D923"/>`;
+    }
+    return s;
+  },
+};
+let artReady = false;
+function injectArt(){
+  if (artReady || !S.members.length) return;
+  artReady = true;
+  const css = S.members.filter(m => ART[m.art]).map(m => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${ART[m.art](rng(m.id))}</svg>`;
+    return `.art-${m.art}{background-image:url("data:image/svg+xml,${encodeURIComponent(svg)}")}`;
+  }).join('\n');
+  const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+}
 function toCents(s){
   s = String(s).trim().replace(/[,，\s¥]/g, '').replace('。', '.');
   if (!/^\d+(\.\d{0,2})?$/.test(s)) return NaN;
@@ -257,6 +366,7 @@ async function mutate(method, path, body){ ++seq; const data = await api(method,
 /* ---------------- 渲染 ---------------- */
 function render(){
   if (me && !S.members.some(m => m.id === me)) me = null;
+  injectArt();
   const total = S.expenses.reduce((a, e) => a + e.amount, 0);
   $('#total').textContent = yuan(total);
   $('#whoami').innerHTML = me ? `${av(me)}<span>${esc(mem(me).name)}</span>` : '选择身份';
@@ -289,7 +399,7 @@ function renderBills(){
       return `<button class="item" data-id="${e.id}">
         ${av(e.payer, 'l')}
         <span class="mid">
-          <span class="desc">${esc(e.desc || '（没写备注）')}</span>
+          <span class="desc">${esc(title(e))}</span>
           <span class="meta">${esc(mem(e.payer).name)} 付，${who}${how}${own}</span>
         </span>
         <span class="right">
@@ -310,14 +420,17 @@ function renderSettle(){
     const txt = b.net > 0 ? `还应收 ${yuan(b.net)}` : b.net < 0 ? `还要付 ${yuan(-b.net)}` : '你两清了';
     mine = `<div class="mycard">${av(me, 'xl')}<div><small>你垫付 ${yuan(b.paid)}，应摊 ${yuan(b.owed)}</small><div class="big num ${cls}">${txt}</div></div></div>`;
   }
-  const tickets = transfers.length ? transfers.map(t => {
+  const mineOnly = onlyMine && me;
+  const shown = mineOnly ? transfers.filter(t => t.from === me || t.to === me) : transfers;
+  const filter = me && transfers.length ? `<div class="seg tf"><button data-tf="mine" aria-pressed="${!!mineOnly}">只看我的</button><button data-tf="all" aria-pressed="${!mineOnly}">全部</button></div>` : '';
+  const tickets = shown.length ? shown.map(t => {
     const isMe = t.from === me || t.to === me;
     const tag = t.from === me ? '你付' : t.to === me ? '你收' : '转账';
     return `<div class="ticket${isMe ? ' me' : ''}">
       <div class="who">${av(t.from)}<span class="n">${esc(mem(t.from).name)}</span><span class="arrow">转给</span>${av(t.to)}<span class="n">${esc(mem(t.to).name)}</span></div>
       <div class="stub"><small>${tag}</small><b class="num">${yuan(t.amount)}</b></div>
     </div>`;
-  }).join('') : `<div class="done">${S.expenses.length ? '所有人都两清了' : '记了账之后，这里会算出谁转给谁'}</div>`;
+  }).join('') : `<div class="done">${!S.expenses.length ? '记了账之后，这里会算出谁转给谁' : !transfers.length ? '所有人都两清了' : '你不用转钱给别人，也没人要转给你'}</div>`;
 
   const rows = S.members.map(m => {
     const x = balances[m.id] || {paid:0, owed:0, net:0};
@@ -329,7 +442,7 @@ function renderSettle(){
 
   el.innerHTML = `${mine}
     <h2>最少 ${transfers.length} 笔转账就能结清</h2>
-    ${tickets}
+    ${filter}${tickets}
     <h2>每个人的账</h2>
     <table><thead><tr><th>成员</th><th>垫付</th><th>应摊</th><th>净额</th></tr></thead><tbody>${rows}</tbody></table>
     ${admin ? `<button class="danger" id="reset">清空账本（会自动备份）</button>` : ''}`;
@@ -349,12 +462,12 @@ function openSheet(expense){
     const editable = expense.created_by === me;
     F = {
       id: expense.id, readonly: !editable, e: expense,
-      amount: centsToInput(expense.amount), desc: expense.desc, payer: expense.payer,
+      amount: centsToInput(expense.amount), cat: expense.cat || '', desc: expense.desc, payer: expense.payer,
       parts: new Set(expense.participants), split: expense.split,
       exact: Object.fromEntries(Object.entries(expense.shares).map(([k, v]) => [k, centsToInput(v)])),
     };
   } else {
-    F = {id: null, readonly: false, amount: '', desc: '', payer: me, parts: new Set(all), split: 'equal', exact: {}};
+    F = {id: null, readonly: false, amount: '', cat: '', desc: '', payer: me, parts: new Set(all), split: 'equal', exact: {}};
   }
   $('#sheet').innerHTML = F.readonly ? readonlyHTML() : formHTML();
   $('#scrim').classList.add('open'); $('#sheet').classList.add('open');
@@ -366,7 +479,7 @@ function readonlyHTML(){
   const e = F.e;
   const t = new Date(e.created_at * 1000).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
   return `<div class="grab"></div>
-    <h3>${esc(e.desc || '（没写备注）')}</h3>
+    <h3>${esc(title(e))}</h3>
     <div class="money" style="border:0"><span>¥</span><b class="num" style="font-size:34px">${NF.format(e.amount / 100)}</b></div>
     <div class="field" style="margin-top:14px"><div class="lbl">${esc(mem(e.payer).name)} 付的，${e.split === 'equal' ? '平分' : '按金额分'}</div>
       <div class="ro">${e.participants.map(p => `<div class="r">${av(p)}<span class="n">${esc(mem(p).name)}</span><span class="num">${yuan(e.shares[p] || 0)}</span></div>`).join('')}</div>
@@ -384,7 +497,8 @@ function formHTML(){
     </div>
     <div class="field">
       <label for="f-desc">花在哪了</label>
-      <input id="f-desc" class="text" maxlength="60" placeholder="午饭、打车、酒店……" value="${esc(F.desc)}">
+      <div class="cats" id="f-cats"></div>
+      <input id="f-desc" class="text" maxlength="60" placeholder="再写点备注，比如：海底捞、机场到酒店（可不填）" value="${esc(F.desc)}">
     </div>
     <div class="field"><div class="lbl">谁付的</div><div class="pick" id="f-payer"></div></div>
     <div class="field"><div class="lbl"><span>谁参与</span><button type="button" data-act="all">全选</button></div><div class="pick" id="f-parts"></div></div>
@@ -400,6 +514,8 @@ function formHTML(){
 }
 
 function renderPicks(){
+  $('#f-cats').innerHTML = (S.categories || []).map(c =>
+    `<button type="button" data-cat="${c.id}" aria-pressed="${F.cat === c.id}">${c.icon} ${esc(c.name)}</button>`).join('');
   $('#f-payer').innerHTML = S.members.map(m =>
     `<button type="button" data-payer="${m.id}" aria-pressed="${F.payer === m.id}">${av(m.id)}${esc(m.name)}</button>`).join('');
   $('#f-parts').innerHTML = S.members.map(m =>
@@ -460,7 +576,7 @@ function updateNote(){
 async function save(){
   const v = validate();
   if (!v.ok) return toast(v.msg || '先填金额');
-  const body = {desc: F.desc.trim(), amount: v.amt, payer: F.payer, participants: v.parts, split: F.split};
+  const body = {cat: F.cat, desc: F.desc.trim(), amount: v.amt, payer: F.payer, participants: v.parts, split: F.split};
   if (F.split === 'exact') body.exact = v.exact;
   const btn = $('#f-save'); btn.disabled = true;
   try {
@@ -500,6 +616,8 @@ $('#bills').addEventListener('click', ev => {
 });
 
 $('#settle').addEventListener('click', async ev => {
+  const tf = ev.target.closest('[data-tf]');
+  if (tf){ onlyMine = tf.dataset.tf === 'mine'; ls.set('sb_tf', tf.dataset.tf); return renderSettle(); }
   if (!ev.target.closest('#reset')) return;
   if (!confirm('清空整个账本？（会自动留一份备份）')) return;
   if (prompt('确认的话输入「清空」') !== '清空') return;
@@ -519,6 +637,7 @@ sheet.addEventListener('click', ev => {
     F.parts = new Set(allOn ? [] : S.members.map(m => m.id));
     return updateSplit();
   }
+  if (t.dataset.cat){ F.cat = F.cat === t.dataset.cat ? '' : t.dataset.cat; return renderPicks(); }
   if (t.dataset.payer){ F.payer = t.dataset.payer; return renderPicks(), updateNote(); }
   if (t.dataset.part){ const p = t.dataset.part; F.parts.has(p) ? F.parts.delete(p) : F.parts.add(p); return updateSplit(); }
   if (t.dataset.split){ F.split = t.dataset.split; return updateSplit(); }
