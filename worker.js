@@ -210,15 +210,25 @@ function findExpense(data, id, who) {
   return e;
 }
 
+let versionCache;
+async function htmlVersion() {
+  if (!versionCache) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(INDEX_HTML));
+    versionCache = [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 12);
+  }
+  return versionCache;
+}
+
 export default {
   async fetch(req, env) {
     try {
-      // 健康检查：不需要 TOKEN，只回答"是哪个版本、密钥和数据库是否正常"，不含任何账本内容。
-      // 部署后 GitHub Actions 用它确认新版本真的上线了。
+      // 健康检查：不需要 TOKEN，只回答"线上是哪个版本、密钥和数据库是否正常"，不含任何账本内容。
+      // version 是 index.html 的 sha256 前 12 位，GitHub Actions 拿它和仓库里的文件比，确认新版本真的上线了。
       if (new URL(req.url).pathname === "/healthz") {
         let db = false;
         try { await env.DB.prepare("SELECT 1").first(); db = true; } catch {}
-        return json({ ok: db && !!env.TOKEN && !!env.ADMIN_KEY, version: env.VERSION || "dev", secrets: !!env.TOKEN && !!env.ADMIN_KEY, db });
+        const secrets = !!env.TOKEN && !!env.ADMIN_KEY;
+        return json({ ok: db && secrets, version: await htmlVersion(), secrets, db });
       }
       if (!env.TOKEN || !env.ADMIN_KEY) {
         return new Response("还没设置密钥：在 Cloudflare 后台这个 Worker 的 设置 → 变量和机密 里添加 TOKEN 和 ADMIN_KEY（类型选「密钥 / Secret」）。", {
