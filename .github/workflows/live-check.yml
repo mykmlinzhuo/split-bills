@@ -1,0 +1,42 @@
+# 检查线上网站：Cloudflare 从 main 自动部署后，确认线上跑的是仓库里这版 index.html，数据库也正常。
+# 只访问 /healthz 和根路径，不需要任何密钥，也不会读到账本内容。
+name: Live check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      SITE: https://split-bills.mykm050721.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Current live state
+        run: |
+          echo "--- GET / (应该是 404 Not Found)"
+          curl -sS -o body.txt -w "status %{http_code}\n" "$SITE/" || true
+          head -c 300 body.txt; echo
+          echo "--- GET /healthz"
+          curl -sS -w "\nstatus %{http_code}\n" "$SITE/healthz" || true
+
+      - name: Wait for this version to go live
+        if: github.event_name != 'pull_request'
+        run: |
+          want=$(sha256sum index.html | cut -c1-12)
+          echo "仓库里的版本: $want"
+          for i in $(seq 1 30); do
+            body=$(curl -fsS "$SITE/healthz" || true)
+            echo "[$i] $body"
+            if echo "$body" | grep -q "\"version\":\"$want\""; then
+              if echo "$body" | grep -q '"ok":true'; then echo "新版本已上线，一切正常"; exit 0; fi
+              echo "::error::新版本已上线，但数据库不正常：$body"; exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::5 分钟内线上没有变成版本 $want，Cloudflare 那边的部署多半失败了"
+          exit 1
