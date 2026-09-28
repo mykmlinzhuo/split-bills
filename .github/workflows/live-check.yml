@@ -1,4 +1,4 @@
-# 检查线上网站：Cloudflare 从 main 自动部署后，确认线上跑的是仓库里这版 index.html，密钥和数据库也正常。
+# 检查线上网站：Cloudflare 从 main 自动部署后，确认线上跑的是仓库里这版 index.html，数据库也正常。
 # 只访问 /healthz 和根路径，不需要任何密钥，也不会读到账本内容。
 name: Live check
 
@@ -18,7 +18,7 @@ jobs:
 
       - name: Current live state
         run: |
-          echo "--- GET / (应该是 404 Not Found；如果是 500 说明密钥没设)"
+          echo "--- GET / (应该是 404 Not Found)"
           curl -sS -o body.txt -w "status %{http_code}\n" "$SITE/" || true
           head -c 300 body.txt; echo
           echo "--- GET /healthz"
@@ -34,7 +34,7 @@ jobs:
             echo "[$i] $body"
             if echo "$body" | grep -q "\"version\":\"$want\""; then
               if echo "$body" | grep -q '"ok":true'; then echo "新版本已上线，一切正常"; exit 0; fi
-              echo "::error::新版本已上线，但密钥或数据库不正常：$body"; exit 1
+              echo "::error::新版本已上线，但数据库不正常：$body"; exit 1
             fi
             sleep 10
           done

@@ -1,7 +1,12 @@
 // 出去玩记账 · Cloudflare Workers + D1 版
 // 接口和 Python 版完全一样，前端 index.html 原样复用。
-// TOKEN / ADMIN_KEY 放在 Cloudflare 后台的 Secret 里，仓库里没有任何密钥，公开也没关系。
+// 仓库里只放 TOKEN / ADMIN_KEY 的 sha256，明文不在仓库里，公开也没关系。
+// 如果在 Cloudflare 后台设了同名 Secret，就以后台的为准。
 import INDEX_HTML from "./index.html";
+
+// 换密钥：生成一串新的随机字母数字，把它的 sha256 填到这里（printf %s '新密钥' | sha256sum）
+const TOKEN_SHA256 = "0c19c8cc02342b8bafd3464f95e60a6fb05c9c3dbaa123f5dd99492278e90da6";
+const ADMIN_SHA256 = "33f7533662af7debca394c2ff1246e7943b21363c2dfbba2715972a8fd18cf90";
 
 // 成员名单：改名字 / 头像都在这里，改完重新 deploy
 // id 是账本里记的，别改；art 是头像：按每个人名字的意象画的小画，可选值见 index.html 里的 ART
@@ -45,6 +50,15 @@ function safeEq(a, b) {
   const y = new TextEncoder().encode(String(b ?? ""));
   if (!y.length || x.length !== y.length) return false;
   return crypto.subtle.timingSafeEqual(x, y);
+}
+async function sha256hex(s) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(s ?? "")));
+  return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+// 有后台 Secret 就比 Secret，没有就比仓库里的哈希
+async function checkKey(given, secret, hash) {
+  if (!given) return false;
+  return secret ? safeEq(given, secret) : safeEq(await sha256hex(given), hash);
 }
 
 // ------------------------------------------------------------ 校验
@@ -213,8 +227,7 @@ function findExpense(data, id, who) {
 let versionCache;
 async function htmlVersion() {
   if (!versionCache) {
-    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(INDEX_HTML));
-    versionCache = [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 12);
+    versionCache = (await sha256hex(INDEX_HTML)).slice(0, 12);
   }
   return versionCache;
 }
@@ -222,22 +235,17 @@ async function htmlVersion() {
 export default {
   async fetch(req, env) {
     try {
-      // 健康检查：不需要 TOKEN，只回答"线上是哪个版本、密钥和数据库是否正常"，不含任何账本内容。
+      // 健康检查：不需要 TOKEN，只回答"线上是哪个版本、数据库是否正常"，不含任何账本内容。
       // version 是 index.html 的 sha256 前 12 位，GitHub Actions 拿它和仓库里的文件比，确认新版本真的上线了。
       if (new URL(req.url).pathname === "/healthz") {
         let db = false;
         try { await env.DB.prepare("SELECT 1").first(); db = true; } catch {}
-        const secrets = !!env.TOKEN && !!env.ADMIN_KEY;
-        return json({ ok: db && secrets, version: await htmlVersion(), secrets, db });
-      }
-      if (!env.TOKEN || !env.ADMIN_KEY) {
-        return new Response("还没设置密钥：在 Cloudflare 后台这个 Worker 的 设置 → 变量和机密 里添加 TOKEN 和 ADMIN_KEY（类型选「密钥 / Secret」）。", {
-          status: 500, headers: { "content-type": "text/plain; charset=utf-8" },
-        });
+        const auth = env.TOKEN ? "secret" : "builtin";
+        return json({ ok: db, version: await htmlVersion(), auth, db });
       }
       const url = new URL(req.url);
       const segs = url.pathname.split("/").filter(Boolean);
-      if (!segs.length || !safeEq(segs[0], env.TOKEN)) return new Response("Not Found", { status: 404 });
+      if (!segs.length || !(await checkKey(segs[0], env.TOKEN, TOKEN_SHA256))) return new Response("Not Found", { status: 404 });
       const rest = segs.slice(1).join("/");
       const method = req.method;
 
@@ -277,7 +285,7 @@ export default {
       }
 
       if (method === "POST" && rest === "api/reset") {
-        if (!safeEq(req.headers.get("x-admin"), env.ADMIN_KEY)) throw new HttpError(403, "只有管理员能清空");
+        if (!(await checkKey(req.headers.get("x-admin"), env.ADMIN_KEY, ADMIN_SHA256))) throw new HttpError(403, "只有管理员能清空");
         const data = await mutate(db, (d) => {
           const pre = d.expenses.length
             ? [db.prepare("INSERT INTO backups (created_at, data) VALUES (?, ?)").bind(Math.floor(Date.now() / 1000), JSON.stringify(d))]
