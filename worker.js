@@ -213,6 +213,13 @@ function findExpense(data, id, who) {
 export default {
   async fetch(req, env) {
     try {
+      // 健康检查：不需要 TOKEN，只回答"是哪个版本、密钥和数据库是否正常"，不含任何账本内容。
+      // 部署后 GitHub Actions 用它确认新版本真的上线了。
+      if (new URL(req.url).pathname === "/healthz") {
+        let db = false;
+        try { await env.DB.prepare("SELECT 1").first(); db = true; } catch {}
+        return json({ ok: db && !!env.TOKEN && !!env.ADMIN_KEY, version: env.VERSION || "dev", secrets: !!env.TOKEN && !!env.ADMIN_KEY, db });
+      }
       if (!env.TOKEN || !env.ADMIN_KEY) {
         return new Response("还没设置密钥：在 Cloudflare 后台这个 Worker 的 设置 → 变量和机密 里添加 TOKEN 和 ADMIN_KEY（类型选「密钥 / Secret」）。", {
           status: 500, headers: { "content-type": "text/plain; charset=utf-8" },
