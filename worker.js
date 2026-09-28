@@ -3,16 +3,30 @@
 // TOKEN / ADMIN_KEY 放在 Cloudflare 后台的 Secret 里，仓库里没有任何密钥，公开也没关系。
 import INDEX_HTML from "./index.html";
 
-// 成员名单：改名字 / 头像 / 颜色都在这里，改完重新 deploy
+// 成员名单：改名字 / 头像都在这里，改完重新 deploy
+// id 是账本里记的，别改；art 是头像：按每个人名字的意象画的小画，可选值见 index.html 里的 ART
 const MEMBERS = [
-  { id: "lz",  name: "lz",  icon: "🦊", color: "#E07A2E" },
-  { id: "gq",  name: "gq",  icon: "🐼", color: "#5F6B7D" },
-  { id: "tjn", name: "tjn", icon: "🐯", color: "#C9920E" },
-  { id: "zxs", name: "zxs", icon: "🐧", color: "#2F6FA3" },
-  { id: "xmy", name: "xmy", icon: "🐰", color: "#C2578F" },
-  { id: "hjy", name: "hjy", icon: "🐸", color: "#3F8F4E" },
+  { id: "lz",  name: "lz",  art: "stream", color: "#4F7D3F" }, // 林间清溪
+  { id: "gq",  name: "gq",  art: "moon",   color: "#33407A" }, // 满月
+  { id: "tjn", name: "tjn", art: "south",  color: "#F4A76A" }, // 南方海边
+  { id: "zxs", name: "zxs", art: "hill",   color: "#77A36E" }, // 云雾环绕的小山
+  { id: "xmy", name: "xmy", art: "skysea", color: "#2A64A3" }, // 秋空与大海
+  { id: "hjy", name: "hjy", art: "joy",    color: "#E84A5F" }, // 满是欢喜的花
 ];
 const IDS = MEMBERS.map((m) => m.id);
+
+// 常用分类：选了之后还能在备注里继续写
+const CATEGORIES = [
+  { id: "food",   name: "吃饭", icon: "🍜" },
+  { id: "taxi",   name: "打车", icon: "🚕" },
+  { id: "hotel",  name: "酒店", icon: "🏨" },
+  { id: "ticket", name: "门票", icon: "🎫" },
+  { id: "travel", name: "交通", icon: "🚄" },
+  { id: "snack",  name: "零食饮料", icon: "🧋" },
+  { id: "shop",   name: "购物", icon: "🛍️" },
+  { id: "other",  name: "其他", icon: "📌" },
+];
+const CAT_IDS = CATEGORIES.map((c) => c.id);
 const MAX_AMOUNT = 100_000_000; // 单笔上限 100 万元（单位：分）
 
 class HttpError extends Error {
@@ -37,6 +51,8 @@ function safeEq(a, b) {
 function parseExpense(b) {
   if (!b || typeof b !== "object") throw new HttpError(400, "请求格式不对");
   const desc = String(b.desc ?? "").trim().slice(0, 60);
+  const cat = b.cat ? String(b.cat) : "";
+  if (cat && !CAT_IDS.includes(cat)) throw new HttpError(400, "分类不对");
 
   const amount = b.amount;
   if (!isInt(amount) || amount <= 0 || amount > MAX_AMOUNT) throw new HttpError(400, "金额要大于 0");
@@ -65,7 +81,7 @@ function parseExpense(b) {
   } else {
     throw new HttpError(400, "分法只能是平均分或按金额");
   }
-  return { desc, amount, payer: b.payer, participants: parts, split: b.split, shares };
+  return { cat, desc, amount, payer: b.payer, participants: parts, split: b.split, shares };
 }
 
 // ------------------------------------------------------------ 结算
@@ -141,7 +157,7 @@ function settle(expenses) {
   };
 }
 
-const snapshot = (data) => ({ members: MEMBERS, expenses: data.expenses, settlement: settle(data.expenses) });
+const snapshot = (data) => ({ members: MEMBERS, categories: CATEGORIES, expenses: data.expenses, settlement: settle(data.expenses) });
 
 // ------------------------------------------------------------ 存储
 // 整个账本存成 D1 里的一行 JSON：每次刷新只读 1 行，远低于免费额度。

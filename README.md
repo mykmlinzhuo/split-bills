@@ -27,7 +27,8 @@
 
 在 GitHub 网页上直接编辑文件，保存后 Cloudflare 会自动重新部署。
 
-- 改成员名字、头像、颜色：`worker.js` 顶部的 `MEMBERS`（改成员 id 会让旧账对不上，建议清空账本后再改）
+- 改成员名字、头像：`worker.js` 顶部的 `MEMBERS`。`art` 是头像，按名字意象画的：`stream` 林间清溪、`moon` 满月、`south` 南方海边、`hill` 云雾小山、`skysea` 秋空大海、`joy` 满是欢喜的花（改成员 id 会让旧账对不上，建议清空账本后再改）
+- 改常用分类（吃饭、打车、酒店……）：`worker.js` 里的 `CATEGORIES`
 - 换密钥：在 Cloudflare 后台改 TOKEN / ADMIN_KEY 的值，不用动代码
 
 ## 其他
