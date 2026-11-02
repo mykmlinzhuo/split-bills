@@ -1,12 +1,16 @@
 // 出去玩记账 · Cloudflare Workers + D1 版
 // 接口和 Python 版完全一样，前端 index.html 原样复用。
-// 仓库里只放 TOKEN / ADMIN_KEY 的 sha256，明文不在仓库里，公开也没关系。
-// 如果在 Cloudflare 后台设了同名 Secret，就以后台的为准。
+// 每次出去玩用一个 TOKEN，每个 TOKEN 是一本独立的账。仓库里只放 TOKEN 的 sha256，明文不在仓库里，公开也没关系。
 import INDEX_HTML from "./index.html";
 
-// 换密钥：生成一串新的随机字母数字，把它的 sha256 填到这里（printf %s '新密钥' | sha256sum）
-const TOKEN_SHA256 = "0c19c8cc02342b8bafd3464f95e60a6fb05c9c3dbaa123f5dd99492278e90da6";
-const ADMIN_SHA256 = "33f7533662af7debca394c2ff1246e7943b21363c2dfbba2715972a8fd18cf90";
+// 开新行程：生成一串新的随机字母数字当 TOKEN，把它的 sha256 加一行到这里（printf %s '新TOKEN' | sha256sum）
+// 旧行程留着，旧链接还能打开查账；删掉那一行，旧链接就打不开了（账还留在数据库里）
+const TRIPS = [
+  { name: "第一次出去玩", sha256: "0c19c8cc02342b8bafd3464f95e60a6fb05c9c3dbaa123f5dd99492278e90da6" },
+  { name: "第二次出去玩", sha256: "04dcb966447549f47c3e106f322eaf06edae226d3cbc64de58fd15567260dd4d" },
+];
+// 最早只有一本账，存在 ledger 表里；第一次运行时会搬到这个 TOKEN 名下
+const LEGACY_SHA256 = "0c19c8cc02342b8bafd3464f95e60a6fb05c9c3dbaa123f5dd99492278e90da6";
 
 // 成员名单：改名字 / 头像都在这里，改完重新 deploy
 // id 是账本里记的，别改；art 是头像：按每个人名字的意象画的小画，可选值见 index.html 里的 ART
@@ -55,10 +59,11 @@ async function sha256hex(s) {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(s ?? "")));
   return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
-// 有后台 Secret 就比 Secret，没有就比仓库里的哈希
-async function checkKey(given, secret, hash) {
-  if (!given) return false;
-  return secret ? safeEq(given, secret) : safeEq(await sha256hex(given), hash);
+// 返回这个 TOKEN 对应的行程 id（就是它的 sha256），不认识就返回 null
+async function findTrip(token) {
+  if (!token) return null;
+  const h = await sha256hex(token);
+  return TRIPS.some((t) => safeEq(h, t.sha256)) ? h : null;
 }
 
 // ------------------------------------------------------------ 校验
@@ -174,34 +179,38 @@ function settle(expenses) {
 const snapshot = (data) => ({ members: MEMBERS, categories: CATEGORIES, expenses: data.expenses, settlement: settle(data.expenses) });
 
 // ------------------------------------------------------------ 存储
-// 整个账本存成 D1 里的一行 JSON：每次刷新只读 1 行，远低于免费额度。
+// 每个行程的账本存成 D1 trips 表里的一行 JSON：每次刷新只读 1 行，远低于免费额度。
 // 写入用 version 做乐观锁，两个人同时提交也不会互相覆盖。
 let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
   await db.batch([
+    db.prepare("CREATE TABLE IF NOT EXISTS trips (trip TEXT PRIMARY KEY, version INTEGER NOT NULL, data TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, data TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS backups (created_at INTEGER NOT NULL, data TEXT NOT NULL)"),
-    db.prepare(`INSERT OR IGNORE INTO ledger (id, version, data) VALUES (1, 0, '{"expenses":[]}')`),
+    db.prepare("INSERT OR IGNORE INTO trips (trip, version, data) SELECT ?, version, data FROM ledger WHERE id = 1").bind(LEGACY_SHA256),
   ]);
   schemaReady = true;
 }
 
-async function readLedger(db) {
-  const row = await db.prepare("SELECT version, data FROM ledger WHERE id = 1").first();
+async function readLedger(db, trip) {
+  let row = await db.prepare("SELECT version, data FROM trips WHERE trip = ?").bind(trip).first();
+  if (!row) {
+    await db.prepare(`INSERT OR IGNORE INTO trips (trip, version, data) VALUES (?, 0, '{"expenses":[]}')`).bind(trip).run();
+    row = await db.prepare("SELECT version, data FROM trips WHERE trip = ?").bind(trip).first();
+  }
   return { version: row.version, data: JSON.parse(row.data) };
 }
 
-async function mutate(db, fn) {
+async function mutate(db, trip, fn) {
   for (let attempt = 0; attempt < 10; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 30 + Math.random() * 120 * attempt));
-    const { version, data } = await readLedger(db);
-    const pre = fn(data) || []; // fn 直接修改 data，可返回需要一起执行的额外语句
-    const update = db
-      .prepare("UPDATE ledger SET data = ?, version = version + 1 WHERE id = 1 AND version = ?")
-      .bind(JSON.stringify(data), version);
-    const results = await db.batch([...pre, update]);
-    if (results[results.length - 1].meta.changes === 1) return data;
+    const { version, data } = await readLedger(db, trip);
+    fn(data); // fn 直接修改 data
+    const result = await db
+      .prepare("UPDATE trips SET data = ?, version = version + 1 WHERE trip = ? AND version = ?")
+      .bind(JSON.stringify(data), trip, version)
+      .run();
+    if (result.meta.changes === 1) return data;
   }
   throw new HttpError(409, "刚好有人同时在改，再点一次");
 }
@@ -240,12 +249,12 @@ export default {
       if (new URL(req.url).pathname === "/healthz") {
         let db = false;
         try { await env.DB.prepare("SELECT 1").first(); db = true; } catch {}
-        const auth = env.TOKEN ? "secret" : "builtin";
-        return json({ ok: db, version: await htmlVersion(), auth, db });
+        return json({ ok: db, version: await htmlVersion(), trips: TRIPS.length, db });
       }
       const url = new URL(req.url);
       const segs = url.pathname.split("/").filter(Boolean);
-      if (!segs.length || !(await checkKey(segs[0], env.TOKEN, TOKEN_SHA256))) return new Response("Not Found", { status: 404 });
+      const trip = await findTrip(segs[0]);
+      if (!trip) return new Response("Not Found", { status: 404 });
       const rest = segs.slice(1).join("/");
       const method = req.method;
 
@@ -260,7 +269,7 @@ export default {
       await ensureSchema(db);
 
       if (method === "GET" && rest === "api/state") {
-        return json(snapshot((await readLedger(db)).data));
+        return json(snapshot((await readLedger(db, trip)).data));
       }
 
       if (method === "POST" && rest === "api/expenses") {
@@ -268,7 +277,7 @@ export default {
         const fields = parseExpense(await readBody(req));
         const now = Math.floor(Date.now() / 1000);
         const e = { id: crypto.randomUUID().replace(/-/g, "").slice(0, 12), ...fields, created_by: who, created_at: now, updated_at: now };
-        const data = await mutate(db, (d) => { d.expenses.push(e); });
+        const data = await mutate(db, trip, (d) => { d.expenses.push(e); });
         return json(snapshot(data));
       }
 
@@ -276,22 +285,10 @@ export default {
       if (m && (method === "PUT" || method === "DELETE")) {
         const who = me(req);
         const fields = method === "PUT" ? parseExpense(await readBody(req)) : null;
-        const data = await mutate(db, (d) => {
+        const data = await mutate(db, trip, (d) => {
           const e = findExpense(d, m[1], who);
           if (method === "PUT") Object.assign(e, fields, { updated_at: Math.floor(Date.now() / 1000) });
           else d.expenses.splice(d.expenses.indexOf(e), 1);
-        });
-        return json(snapshot(data));
-      }
-
-      if (method === "POST" && rest === "api/reset") {
-        if (!(await checkKey(req.headers.get("x-admin"), env.ADMIN_KEY, ADMIN_SHA256))) throw new HttpError(403, "只有管理员能清空");
-        const data = await mutate(db, (d) => {
-          const pre = d.expenses.length
-            ? [db.prepare("INSERT INTO backups (created_at, data) VALUES (?, ?)").bind(Math.floor(Date.now() / 1000), JSON.stringify(d))]
-            : [];
-          d.expenses = [];
-          return pre;
         });
         return json(snapshot(data));
       }

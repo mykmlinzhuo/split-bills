@@ -8,11 +8,18 @@
 2. **Cloudflare**（免费注册）：进入 Workers 和 Pages → 创建 → 导入 Git 存储库（Import a repository）→ 授权 GitHub，选刚才的仓库
    - 项目名称必须填 `split-bills`（和 wrangler.jsonc 里的 name 一致）
    - 其他设置保持默认，点部署。第一次部署会自动创建数据库
-3. **密钥**：不用在 Cloudflare 里设。`worker.js` 顶部的 `TOKEN_SHA256` / `ADMIN_SHA256` 存的是两个密钥的 sha256，明文只有管理员自己知道
+3. **TOKEN**：不用在 Cloudflare 里设。`worker.js` 顶部的 `TRIPS` 里存的是每次行程 TOKEN 的 sha256，明文只在群里的链接里
 4. 打开 `https://split-bills.你的子域名.workers.dev/你的TOKEN/` 就能用了，把这个链接发到群里
 
-管理员链接（自己用，打开一次后结算页底部会出现"清空账本"）：
-`https://split-bills.你的子域名.workers.dev/你的TOKEN/?admin=你的ADMIN_KEY`
+## 每次出去玩开一本新账
+
+每个 TOKEN 是一本独立的账，没有"清空"这回事：
+
+1. 生成一串新的随机字母数字当新 TOKEN，算出 sha256：`printf %s '新TOKEN' | sha256sum`
+2. 在 `worker.js` 的 `TRIPS` 里加一行 `{ name: "这次去哪", sha256: "算出来的哈希" }`，保存后自动部署
+3. 把 `https://split-bills.你的子域名.workers.dev/新TOKEN/` 发到群里
+
+旧行程的链接照样能打开查账。不想让旧链接再打开，就把那一行删掉（账还留在数据库的 trips 表里）。
 
 ## 手机上怎么用
 
@@ -25,11 +32,6 @@
 
 在 GitHub 网页上直接编辑文件，保存后 Cloudflare 会自动重新部署。
 
-- 改成员名字、头像：`worker.js` 顶部的 `MEMBERS`。`art` 是头像，按名字意象画的：`stream` 林间清溪、`moon` 满月、`south` 南方海边、`hill` 云雾小山、`skysea` 秋空大海、`joy` 满是欢喜的花（改成员 id 会让旧账对不上，建议清空账本后再改）
+- 改成员名字、头像：`worker.js` 顶部的 `MEMBERS`。`art` 是头像，按名字意象画的：`stream` 林间清溪、`moon` 满月、`south` 南方海边、`hill` 云雾小山、`skysea` 秋空大海、`joy` 满是欢喜的花（成员名单所有行程共用；改掉或删掉某个成员 id，旧行程里这个人的账会对不上）
 - 改常用分类（吃饭、打车、酒店……）：`worker.js` 里的 `CATEGORIES`
-- 换密钥：生成一串新的随机字母数字，算出 sha256（`printf %s '新密钥' | sha256sum`），替换 `worker.js` 里对应的哈希。如果在 Cloudflare 后台设了同名 Secret（TOKEN / ADMIN_KEY），以后台为准
 - 线上是否正常：GitHub 的 Actions → Live check 会在每次合并后检查；也可以直接打开 `https://split-bills.你的子域名.workers.dev/healthz`
-
-## 其他
-
-- 清空账本前会自动备份到数据库的 backups 表，在 Cloudflare 后台 D1 页面能看到
